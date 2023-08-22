@@ -1,7 +1,7 @@
 ---
 title: newArticle001
 tags:
-  - ''
+  - 'test'
 private: false
 updated_at: ''
 id: null
@@ -9,4 +9,4 @@ organization_url_name: null
 slide: false
 ---
 
-# テスト投稿です
+# テスト投稿
