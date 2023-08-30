@@ -11,6 +11,6 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@qiita/qiita-cli": "^1.0.0"
+    "@qiita/qiita-cli": "latest"
   }
 }
