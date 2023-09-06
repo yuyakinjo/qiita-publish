@@ -1,0 +1,110 @@
+---
+title: AWS CDK(Typescript) で LambdaEdge を使う
+tags:
+  - 'aws cdk'
+  - 'typescript'
+  - 'lambda'
+private: false
+updated_at: ''
+id: null
+organization_url_name: null
+slide: false
+---
+
+# 想定
+
+1. クロスリージョンスタック(複数リージョンのスタックを連携)
+2. [NodejsFunction](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_lambda_nodejs.NodejsFunction.html)を使っている（ts で書いたハンドラーをそのままデプロイできる construct）
+
+# 結論
+
+```cdk.ts
+#!/usr/bin/env node
+import * as cdk from "aws-cdk-lib";
+import "source-map-support/register";
+import { LambdaEdgeStack } from "../lib/lambda-edge-stack";
+import { SampleStack } from "../lib/sample-stack";
+
+const app = new cdk.App();
+
+const account = process.env.CDK_DEFAULT_ACCOUNT;
+
+export const REGION = {
+  VIRGINIA: "us-east-1",
+  TOKYO: "ap-northeast-1",
+};
+
+const lambdaEdgeStack = new LambdaEdgeStack(app, LambdaEdgeStack.name, {
+  env: { account, region: REGION.VIRGINIA },
+  crossRegionReferences: true,
+});
+
+const sampleStack = new SampleStack(app, SampleStack.name, {
+  env: { account, region: REGION.TOKYO },
+  lambdaEdgeFunction: lambdaEdgeStack.function,
+  crossRegionReferences: true,
+});
+
+sampleStack.addDependency(lambdaEdgeStack);
+```
+
+```lambda-edge-stack.ts
+import { Stack, StackProps } from "aws-cdk-lib";
+import { CompositePrincipal, ManagedPolicy, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import { Runtime } from "aws-cdk-lib/aws-lambda";
+import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
+import { Construct } from "constructs";
+import { join } from "path";
+
+export class LambdaEdgeStack extends Stack {
+  function: NodejsFunction;
+
+  constructor(scope: Construct, id: string, props?: StackProps) {
+    super(scope, id, props);
+
+    const role = new Role(this, "LambdaEdgeExecutionRole", {
+      assumedBy: new CompositePrincipal(
+        new ServicePrincipal("lambda.amazonaws.com"),
+        new ServicePrincipal("edgelambda.amazonaws.com") // デフォルトで生成されるロールはこれがないので追加
+      ),
+      managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")],
+    });
+
+    this.function = new NodejsFunction(this, NodejsFunction.name, {
+      entry: join(__dirname, "./handler.ts"),
+      handler: "handler",
+      runtime: Runtime.NODEJS_18_X,
+      awsSdkConnectionReuse: false, // このプロパティを`false`にしないと、`LambdaEdge`は環境変数は使えないよエラーを出す
+      role,
+    });
+  }
+}
+```
+
+```handler.ts
+import { Callback, CloudFrontRequestEvent, Context } from "aws-lambda";
+
+export const handler = async (event: CloudFrontRequestEvent, context: Context, callback: Callback) => {
+  console.log("hi mom")
+};
+```
+
+# ポイント
+
+1. `lambda-edge-stack.ts` で `awsSdkConnectionReuse: false`
+2. cloudfront でのログ出力のため`lambda-edge-stack.ts` で ロールに`edgelambda.amazonaws.com`を付与必須
+
+1 を `true` にすると `lambdaEdge` では環境変数は使えないエラーが出ます。
+2 はデフォルトのロールも生成されるのですが、それだと ServicePrincipal に`lambda.amazonaws.com`しかないので、`edgelambda.amazonaws.com`を追加しないと
+
+cdk デプロイ時に
+
+```
+Resource handler returned message: "Invalid request provided: AWS::CloudFront::Distribution: The function execution role must be assumable with edgelambda.amazonaws.com as well as lambda.amazonaws.com principals. Update the IAM role and try again.
+```
+
+というエラーが出るのでそのため新しくロールを作成しています。
+
+# 参考
+
+- https://docs.aws.amazon.com/ja_jp/AmazonCloudFront/latest/DeveloperGuide/lambda-edge-permissions.html#lambda-edge-permissions-function-execution
